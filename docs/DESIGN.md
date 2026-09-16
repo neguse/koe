@@ -1,0 +1,161 @@
+# koe 設計
+
+- Status: Draft
+- Updated: 2026-09-16
+
+## 1. 何を作るか
+
+`koe` は、AI エージェントが人間へ声で合図するための CLI である。
+
+- 引数か標準入力の日本語テキストを、VOICEVOX CORE でその場で合成する。
+- 合成した WAV を miniaudio で in-process 再生し、喋り終わるまで返らない。
+- Linux / Windows / macOS で同じ名前、同じ引数、同じ設定ファイルで動く。
+
+### 動機
+
+エージェントに「N 秒後に○○して、その M 秒後に□□して」と手順を出されても、
+画面を読みながらではタイミングが合わない。声で言われると合う。
+`ask` で質問を立てたとき、席にいれば声で気づいてターミナルで即答できる。
+いずれも「喋る」だけの独立した部品があれば足りる。
+
+### なぜ名前が `koe` か
+
+`say` は macOS 標準コマンドと衝突し、`speak` は espeak 系が同名で置く。
+将来 Mac が加わったときに使い方が変わらないよう、どの OS の既存コマンドとも
+パッケージレジストリ（PyPI / crates.io / npm / Arch）とも被らない名前にした。
+
+### なぜ VOICEVOX CORE か
+
+前提は「オフライン」「無料」「ライセンスがゆるい」「ネイティブ CLI」。
+
+| 候補 | 落とした理由 |
+| --- | --- |
+| Edge TTS（edge-tts 系） | Edge ブラウザの読み上げ用エンドポイントを非公式に叩く裏道 |
+| Azure / Polly / OpenAI | 公式だがアカウントとキー管理が増え、ネット必須 |
+| OS 標準音声 | Linux に相当品がなく、三 OS で挙動が揃わない |
+| Open JTalk 単体 | 保守が止まっている |
+| sherpa-onnx + Kokoro | 日本語の読みの品質が未確認 |
+
+VOICEVOX CORE は MIT、活発に保守され、日本語の品質が候補中で最良。
+C API を公式配布しており、C から直接呼べる。起動は 1 秒弱で合図用途に足りる。
+
+### なぜ C + miniaudio か
+
+VOICEVOX CORE が C API なので、C で書けば FFI 層が消える。
+miniaudio は単一ヘッダ（MIT-0 / パブリックドメイン）で、PulseAudio / ALSA /
+WASAPI / CoreAudio を一つの API で扱い、デバイス列挙と選択が三 OS で同じコードになる。
+WAV デコードも内蔵。結果として子プロセスも外部の再生ツールも要らない。
+
+Go で書く案は `go build` 一つで済む利点があったが、purego で C API を一関数ずつ
+束ねる手間と、Windows で出力デバイスを選べない欠点があった。
+
+## 2. 前提と割り切り
+
+- 日本語テキストのみ。読みは VOICEVOX CORE と Open JTalk 辞書に任せる。
+- 一回の実行で一文。長文の分割や SSML は扱わない。
+- VOICEVOX CORE の配置は公式 Downloader に任せ、`koe` は置き場所を設定で知るだけ。
+- CPU 版のみ。GPU（CUDA / DirectML）は扱わない。
+- 設定は `key=value` 行の自前パースで、TOML ライブラリは足さない。
+- 常駐しない。毎回ライブラリと辞書とモデルを読み込む。起動 1 秒弱は許容する。
+- 音声のファイル出力、話速・音高の調整、複数話者の切り替えは MVP ではやらない。
+
+## 3. 構成
+
+```mermaid
+flowchart LR
+    in[引数 / 標準入力] --> koe
+    cfg[config] --> koe
+    koe -->|dlopen| core[libvoicevox_core]
+    core --> ort[ONNX Runtime]
+    core --> dict[Open JTalk 辞書]
+    core --> vvm[音声モデル .vvm]
+    koe -->|WAV| ma[miniaudio]
+    ma --> dev[出力デバイス]
+```
+
+ファイル構成:
+
+| ファイル | 役割 |
+| --- | --- |
+| `koe.c` | 引数と設定の解釈、VOICEVOX CORE の呼び出し、再生 |
+| `config.c` / `config.h` | `key=value` ファイルの読み込み。テスト対象 |
+| `miniaudio.h` | 同梱。再生とデバイス列挙 |
+| `voicevox_core.h` | 同梱。VOICEVOX CORE の C API 宣言 |
+| `Makefile` | `cc` でのビルドとテスト |
+
+## 4. 処理の流れ
+
+1. 引数を解釈する。サブコマンド `devices` / `styles` はそれぞれ一覧を出して終わる。
+   引数がなければ標準入力を末尾まで読む。空なら終了コード 2。
+2. 設定ファイルを読む。無ければ既定値。`core` の既定は
+   `~/.local/share/koe/voicevox_core`（Windows は `%LOCALAPPDATA%\koe\voicevox_core`）。
+3. `{core}/c_api/lib` から `libvoicevox_core` を `dlopen` / `LoadLibrary` し、
+   使う関数だけシンボル解決する。
+4. VOICEVOX CORE を初期化する。順序は公式サンプルに倣う。
+   - `voicevox_onnxruntime_load_once`（`{core}/onnxruntime/lib` の推奨ファイル名）
+   - `voicevox_open_jtalk_rc_new`（`{core}/dict` 配下の辞書）
+   - `voicevox_synthesizer_new`
+   - `{core}/models/vvms/*.vvm` を `voicevox_voice_model_file_open` して
+     `voicevox_synthesizer_load_voice_model`
+5. `voicevox_synthesizer_tts(text, style)` で WAV を得る。
+6. miniaudio で WAV をデコードし、設定の `device` に一致する出力デバイスで再生する。
+   再生完了まで待ち、`voicevox_wav_free` して終了コード 0。
+7. どこかで失敗したら `voicevox_error_result_to_message` か miniaudio の
+   結果コードを標準エラーに出し、終了コード 1。
+
+## 5. 文字コード
+
+`koe` はテキストを解釈せず UTF-8 のバイト列として通す。
+`voicevox_synthesizer_tts` の入力は UTF-8 と明記されている。
+
+- Linux / macOS: `argv`、標準入力、設定ファイルはそのまま UTF-8。
+- Windows: `wmain` で UTF-16 の引数を受け、`WideCharToMultiByte` で UTF-8 に変換する。
+  標準入力は `_setmode` でバイナリにして読み、同じ関数で変換する。
+  Windows 固有の処理はこの一箇所に閉じる。
+
+## 6. 設定
+
+`~/.config/koe/config`（Windows は `%APPDATA%\koe\config`）。
+`#` 始まりと空行は無視。`key=value` 一行一項目。
+
+| key | 既定 | 意味 |
+| --- | --- | --- |
+| `core` | `~/.local/share/koe/voicevox_core` | Downloader の `-o` に渡した配置先 |
+| `style` | `3` | スタイル ID。`koe styles` で一覧 |
+| `device` | 空 | 出力デバイス名。空なら OS 既定。`koe devices` で一覧 |
+| `volume` | `1.0` | 音量倍率。miniaudio 側で掛ける |
+
+出力デバイスと音量を設定に置くのは、既定デバイスの音量が 0 で聞こえなかった
+経験から。機ごとに違う値なので設定ファイルは機ごとに持ち、リポジトリに入れない。
+
+## 7. テスト
+
+- `config.c` の単体テスト（既定値、コメントと空行、未知キーの無視、`~` 展開）を
+  `make test` で回す。
+- 合成と再生は音を聞くしかないので、受入条件で人間が確認する。
+- `koe devices` と `koe styles` は実機で出力を目視する。
+
+## 8. 受入条件
+
+1. README の手順どおりに Linux 機へ配置・ビルド・設定し、`koe "テスト"` が
+   本体スピーカーから聞こえる。
+2. `koe devices` に本体スピーカーが出て、`device=` に指定すると
+   既定デバイスが別でもそこから鳴る。
+3. `echo テスト | koe` でも同じ結果になる。
+4. Windows 機でのビルドと再生は README に「未検証」と明記し、確認できた時点で更新する。
+
+## 9. この案を卒業する条件
+
+- 起動 1 秒弱が合図用途で気になる（常駐化か、モデルの事前読み込みを検討する）。
+- 話者や話速を変えたくなる（設定項目の追加で済む範囲）。
+- Windows で C ツールチェインの用意が重い（Go + purego 案に戻る）。
+
+## 10. 参考資料
+
+- [VOICEVOX CORE](https://github.com/VOICEVOX/voicevox_core) — MIT
+- [VOICEVOX CORE Downloader](https://github.com/VOICEVOX/voicevox_core/blob/main/docs/guide/user/downloader.md)
+- [C API ヘッダ](https://github.com/VOICEVOX/voicevox_core/blob/main/crates/voicevox_core_c_api/include/voicevox_core.h)
+- [C++ サンプル（初期化から合成までの順序）](https://github.com/VOICEVOX/voicevox_core/blob/main/example/cpp/unix/talk.cpp)
+- [音声モデルとスタイル ID の対応表](https://github.com/VOICEVOX/voicevox_vvm/blob/main/README.md)
+- [音声モデル利用規約](https://github.com/VOICEVOX/voicevox_vvm/blob/main/TERMS.txt)
+- [miniaudio](https://github.com/mackron/miniaudio) — MIT-0 / パブリックドメイン
