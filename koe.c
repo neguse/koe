@@ -18,6 +18,7 @@
 
 #include "config.h"
 
+#include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -213,7 +214,9 @@ static void device_id_string(ma_backend backend, const ma_device_id *id, char *b
     case ma_backend_coreaudio:  snprintf(buf, cap, "%s", id->coreaudio); break;
 #ifdef _WIN32
     case ma_backend_wasapi:
-        WideCharToMultiByte(CP_UTF8, 0, id->wasapi, -1, buf, (int)cap, NULL, NULL);
+        /* wchar_t の ID を、UTF-8 ロケール(main で設定)の wcstombs で UTF-8 にする */
+        if (wcstombs(buf, id->wasapi, cap) == (size_t)-1) buf[0] = '\0';
+        buf[cap - 1] = '\0';
         break;
 #endif
     default: snprintf(buf, cap, "(%s: unsupported backend)", ma_get_backend_name(backend)); break;
@@ -427,20 +430,11 @@ static int run(int argc, char **argv) {
     return rc;
 }
 
+int main(int argc, char **argv) {
 #ifdef _WIN32
-/* 引数は UTF-16 で受け、UTF-8 に直してから共通処理へ渡す。 */
-int wmain(int argc, wchar_t **wargv) {
-    char **argv = calloc((size_t)argc + 1, sizeof *argv);
-    for (int i = 0; i < argc; i++) {
-        int n = WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, NULL, 0, NULL, NULL);
-        argv[i] = malloc((size_t)n);
-        WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, argv[i], n, NULL, NULL);
-    }
-    int rc = run(argc, argv);
-    for (int i = 0; i < argc; i++) free(argv[i]);
-    free(argv);
-    return rc;
-}
-#else
-int main(int argc, char **argv) { return run(argc, argv); }
+    /* argv と A 系 API を UTF-8 にするのは実行ファイルに埋めたマニフェスト
+       (koe.manifest, activeCodePage=UTF-8)。CRT の wcstombs もここで UTF-8 に合わせる。 */
+    setlocale(LC_ALL, ".UTF-8");
 #endif
+    return run(argc, argv);
+}

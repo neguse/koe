@@ -36,6 +36,7 @@ jobs:
           cl /nologo /O2 /W3 /utf-8 /std:clatest /D_CRT_SECURE_NO_WARNINGS /Fe:config_test.exe config_test.c config.c || exit /b 1
           config_test.exe || exit /b 1
           cl /nologo /O2 /W3 /utf-8 /std:clatest /D_CRT_SECURE_NO_WARNINGS /Fe:koe.exe koe.c config.c || exit /b 1
+          mt.exe -nologo -manifest koe.manifest -outputresource:koe.exe;#1 || exit /b 1
           move koe.exe ${{ matrix.artifact }}.exe
 
       - uses: actions/upload-artifact@v4
