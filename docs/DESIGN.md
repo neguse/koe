@@ -98,7 +98,8 @@ flowchart LR
    - `{core}/models/vvms/*.vvm` を `voicevox_voice_model_file_open` して
      `voicevox_synthesizer_load_voice_model`
 5. `voicevox_synthesizer_tts(text, style)` で WAV を得る。
-6. miniaudio で WAV をデコードし、設定の `device` に一致する出力デバイスで再生する。
+6. miniaudio で WAV をデコードし、`ma_device_id` が設定の `device` と完全一致する
+   出力デバイスで再生する。空なら OS 既定。
    再生完了まで待ち、`voicevox_wav_free` して終了コード 0。
 7. どこかで失敗したら `voicevox_error_result_to_message` か miniaudio の
    結果コードを標準エラーに出し、終了コード 1。
@@ -122,8 +123,26 @@ flowchart LR
 | --- | --- | --- |
 | `core` | `~/.local/share/koe/voicevox_core` | Downloader の `-o` に渡した配置先 |
 | `style` | `3` | スタイル ID。`koe styles` で一覧 |
-| `device` | 空 | 出力デバイス名。空なら OS 既定。`koe devices` で一覧 |
+| `device` | 空 | 出力デバイスの ID（後述）。空なら OS 既定 |
 | `volume` | `1.0` | 音量倍率。miniaudio 側で掛ける |
+
+### 出力デバイスの ID
+
+`device` は koe 独自の番号ではなく、バックエンドが持つ識別子をそのまま受ける。
+miniaudio は各バックエンドの識別子を `ma_device_id` として露出しており、
+完全一致で選ぶ。友好名（`Ryzen HD Audio Controller Analog Stereo` など）は
+同名の曖昧さと OS 更新で変わる問題があるので受けない。
+
+| バックエンド | ID の中身 | OS 側で見る方法 |
+| --- | --- | --- |
+| PulseAudio（PipeWire の pulse 互換含む） | sink 名。例: `alsa_output.pci-0000_04_00.6.analog-stereo` | `pactl list short sinks` |
+| ALSA | デバイス名 | `aplay -L` |
+| WASAPI | endpoint ID 文字列 | 手軽な OS 標準 CLI がない |
+| CoreAudio | device UID | 手軽な OS 標準 CLI がない |
+
+miniaudio は Linux で PulseAudio を ALSA より先に試すため、通常は `pactl` の
+sink 名がそのまま使える。`koe devices` は Windows / macOS で ID を見る手段が
+乏しいための一覧表示で、`ID<TAB>名前` を一行ずつ出し、OS 既定に印を付ける。
 
 出力デバイスと音量を設定に置くのは、既定デバイスの音量が 0 で聞こえなかった
 経験から。機ごとに違う値なので設定ファイルは機ごとに持ち、リポジトリに入れない。

@@ -56,7 +56,8 @@ $ install -m 755 koe ~/bin/
 core=/home/neguse/.local/share/koe/voicevox_core
 # スタイル ID。3 はずんだもん・ノーマル
 style=3
-# 出力デバイス名。空なら OS の既定。候補は `koe devices` で出る
+# 出力デバイスの ID。空なら OS の既定。候補は `koe devices` で出る
+# （Linux では `pactl list short sinks` の sink 名と同じ）
 device=
 # 音量倍率
 volume=1.0
@@ -67,7 +68,7 @@ volume=1.0
 ```console
 $ koe "文"                 # 引数の文を喋る
 $ echo "文" | koe          # 標準入力からも受ける
-$ koe devices              # 出力デバイスの一覧
+$ koe devices              # 出力デバイスの一覧（ID と名前、既定に印）
 $ koe styles               # 配置済みモデルの話者とスタイル ID の一覧
 ```
 
