@@ -81,7 +81,9 @@ flowchart LR
 | `config.c` / `config.h` | `key=value` ファイルの読み込み。テスト対象 |
 | `miniaudio.h` | 同梱。再生とデバイス列挙 |
 | `voicevox_core.h` | 同梱。VOICEVOX CORE の C API 宣言 |
-| `Makefile` | `cc` でのビルドとテスト |
+| `Makefile` | `cc` でのビルドとテスト（Linux / macOS） |
+| `koe.manifest` | Windows 用。`argv` と A 系 API を UTF-8 にする |
+| `.github/workflows/build.yml` | 三 OS でのビルドとテスト。タグ push で release に実行ファイルを添付 |
 
 ## 4. 処理の流れ
 
@@ -117,9 +119,12 @@ core のログは tracing の `RUST_LOG` で制御される。未設定だと IN
 `voicevox_synthesizer_tts` の入力は UTF-8 と明記されている。
 
 - Linux / macOS: `argv`、標準入力、設定ファイルはそのまま UTF-8。
-- Windows: `wmain` で UTF-16 の引数を受け、`WideCharToMultiByte` で UTF-8 に変換する。
-  標準入力は `_setmode` でバイナリにして読み、同じ関数で変換する。
-  Windows 固有の処理はこの一箇所に閉じる。
+- Windows: 実行ファイルに `koe.manifest`（`activeCodePage=UTF-8`、Windows 10 1903 以降）を
+  埋め込む。これで `argv` も `fopen` / `LoadLibraryA` などの A 系 API も UTF-8 になり、
+  C 側は三 OS とも同じ `main` 一つで済む。埋め込みは CI の `mt.exe` 一工程。
+  残る変換は miniaudio が `wchar_t` で返す WASAPI のデバイス ID だけで、
+  `setlocale(LC_ALL, ".UTF-8")` の上で C 標準の `wcstombs` を使う。
+- 標準入力はどの OS でもバイト列をそのまま UTF-8 とみなす。
 
 ## 6. 設定
 
@@ -154,10 +159,19 @@ sink 名がそのまま使える。`koe devices` は Windows / macOS で ID を�
 出力デバイスと音量を設定に置くのは、既定デバイスの音量が 0 で聞こえなかった
 経験から。機ごとに違う値なので設定ファイルは機ごとに持ち、リポジトリに入れない。
 
+### ビルドと配布
+
+ビルドは GitHub Actions に寄せる。Linux / macOS は `make test && make`、Windows は
+MSVC の `cl` で同じソースをビルドし、`mt.exe` でマニフェストを埋める。
+`v*` タグを push すると release が作られ、`koe-linux-x64` / `koe-macos-arm64` /
+`koe-windows-x64.exe` が添付される。各機の導入は Releases から取るだけで、
+C ツールチェインは要らない。CI で確かめられるのはビルドとテストまでで、
+音が出るかは各機で一度聞く。
+
 ## 7. テスト
 
-- `config.c` の単体テスト（既定値、コメントと空行、未知キーの無視、`~` 展開）を
-  `make test` で回す。
+- `config.c` の単体テスト（既定値、コメントと空行、未知キーの無視、空白の扱い、
+  不正値の拒否）を `make test` で回す。
 - 合成と再生は音を聞くしかないので、受入条件で人間が確認する。
 - `koe devices` と `koe styles` は実機で出力を目視する。
 
@@ -175,7 +189,7 @@ sink 名がそのまま使える。`koe devices` は Windows / macOS で ID を�
 
 - 起動 1 秒弱が合図用途で気になる（常駐化か、モデルの事前読み込みを検討する）。
 - 話者や話速を変えたくなる（設定項目の追加で済む範囲）。
-- Windows で C ツールチェインの用意が重い（Go + purego 案に戻る）。
+- Windows の CI ビルドが保守しきれなくなる（Go + purego 案に戻る）。
 
 ## 10. 参考資料
 

@@ -11,11 +11,11 @@ VOICEVOX CORE でオフライン合成し、その場で鳴らして、喋り終
 
 ## 対応環境
 
-| OS | ビルド | 再生 | 状態 |
-| --- | --- | --- | --- |
-| Linux x64 | `cc` + `make` | PulseAudio / PipeWire / ALSA | 動作確認済み |
-| Windows x64 | MSVC または MinGW | WASAPI | 未検証 |
-| macOS | `cc` + `make` | CoreAudio | 未検証 |
+| OS | 再生 | 状態 |
+| --- | --- | --- |
+| Linux x64 | PulseAudio / PipeWire / ALSA | 動作確認済み |
+| Windows x64 | WASAPI | CI でビルドのみ確認。再生は未検証 |
+| macOS (arm64) | CoreAudio | CI でビルドのみ確認。再生は未検証 |
 
 ## Install
 
@@ -38,14 +38,19 @@ Windows は PowerShell で `download-windows-x64.exe` を取得して同様に�
 音声モデルには [利用規約](https://github.com/VOICEVOX/voicevox_vvm/blob/main/TERMS.txt) がある。
 生成した音声を公開する場合は VOICEVOX と話者のクレジット表記が要る。
 
-### 2. ビルド
+### 2. 実行ファイルの配置
+
+[Releases](https://github.com/neguse/koe/releases) から OS に合うものを取り、
+`koe`（Windows は `koe.exe`）という名前で PATH に置く。
 
 ```console
-$ make
-$ install -m 755 koe ~/bin/
+$ curl -sSfL https://github.com/neguse/koe/releases/latest/download/koe-linux-x64 -o ~/bin/koe
+$ chmod +x ~/bin/koe
 ```
 
-依存は C コンパイラだけ。`miniaudio.h` と `voicevox_core.h` はリポジトリに同梱する。
+手元でビルドするなら Linux / macOS は `make`（C コンパイラのみ必要）、Windows は
+`.github/workflows/build.yml` の `cl` と `mt.exe` の行をそのまま実行する。
+`miniaudio.h` と `voicevox_core.h` はリポジトリに同梱している。
 
 ### 3. 設定
 
