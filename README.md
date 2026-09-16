@@ -13,7 +13,7 @@ VOICEVOX CORE でオフライン合成し、その場で鳴らして、喋り終
 
 | OS | ビルド | 再生 | 状態 |
 | --- | --- | --- | --- |
-| Linux x64 | `cc` + `make` | PulseAudio / PipeWire / ALSA | 未検証（受入条件 1 で確認） |
+| Linux x64 | `cc` + `make` | PulseAudio / PipeWire / ALSA | 動作確認済み |
 | Windows x64 | MSVC または MinGW | WASAPI | 未検証 |
 | macOS | `cc` + `make` | CoreAudio | 未検証 |
 
@@ -32,7 +32,8 @@ $ ./download -o ~/.local/share/koe/voicevox_core --models-pattern '0.vvm'
 
 Windows は PowerShell で `download-windows-x64.exe` を取得して同様に実行する。
 `--models-pattern` は初期話者（ずんだもん・四国めたん）の入った `0.vvm` だけを取る指定で、
-他の話者が欲しければ外す。
+他の話者が欲しければ外す。Downloader は音声モデルと ONNX Runtime の利用規約への同意を
+対話で求める（`y` で同意）。配置は合計 180MB ほど。
 
 音声モデルには [利用規約](https://github.com/VOICEVOX/voicevox_vvm/blob/main/TERMS.txt) がある。
 生成した音声を公開する場合は VOICEVOX と話者のクレジット表記が要る。
@@ -68,8 +69,11 @@ volume=1.0
 ```console
 $ koe "文"                 # 引数の文を喋る
 $ echo "文" | koe          # 標準入力からも受ける
-$ koe devices              # 出力デバイスの一覧（ID と名前、既定に印）
-$ koe styles               # 配置済みモデルの話者とスタイル ID の一覧
+$ koe devices              # 出力デバイスの一覧（ID<TAB>名前、既定に * ）
+$ koe styles               # 配置済みモデルの話者とスタイル ID（JSON）
 ```
 
 終了コードは、喋り終えたら 0、合成や再生に失敗したら 1、使い方の誤りは 2。
+一文あたり、初期化に 1 秒弱、合成に 1〜2 秒かかってから喋り始める。
+
+VOICEVOX CORE のログは `RUST_LOG` で制御する。未設定なら `error` 相当に絞る。

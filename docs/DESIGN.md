@@ -92,9 +92,13 @@ flowchart LR
 3. `{core}/c_api/lib` から `libvoicevox_core` を `dlopen` / `LoadLibrary` し、
    使う関数だけシンボル解決する。
 4. VOICEVOX CORE を初期化する。順序は公式サンプルに倣う。
-   - `voicevox_onnxruntime_load_once`（`{core}/onnxruntime/lib` の推奨ファイル名）
-   - `voicevox_open_jtalk_rc_new`（`{core}/dict` 配下の辞書）
-   - `voicevox_synthesizer_new`
+   - `voicevox_onnxruntime_load_once`。ファイルは `{core}/onnxruntime/lib` を
+     版なしの推奨名（`libvoicevox_onnxruntime.so` 等）を接頭辞にして探す。
+     core が返す版付きの推奨名は Downloader が置いた版と一致しないことがあるため。
+   - `voicevox_open_jtalk_rc_new`（`{core}/dict` 配下の `open_jtalk_dic*`）
+   - `voicevox_synthesizer_new`。`cpu_num_threads` は 4 に固定する。0（自動）だと
+     ONNX Runtime が CPU affinity を設定しようとし、cgroup 等で CPU が絞られた
+     環境では失敗ログを大量に出して遅くなる。合成時間は 2〜4 スレッドで頭打ちだった。
    - `{core}/models/vvms/*.vvm` を `voicevox_voice_model_file_open` して
      `voicevox_synthesizer_load_voice_model`
 5. `voicevox_synthesizer_tts(text, style)` で WAV を得る。
@@ -103,6 +107,9 @@ flowchart LR
    再生完了まで待ち、`voicevox_wav_free` して終了コード 0。
 7. どこかで失敗したら `voicevox_error_result_to_message` か miniaudio の
    結果コードを標準エラーに出し、終了コード 1。
+
+core のログは tracing の `RUST_LOG` で制御される。未設定だと INFO が標準エラーに
+出るので、koe は `RUST_LOG` が未設定のときだけ `error` を設定してから core を読む。
 
 ## 5. 文字コード
 
@@ -157,10 +164,11 @@ sink 名がそのまま使える。`koe devices` は Windows / macOS で ID を�
 ## 8. 受入条件
 
 1. README の手順どおりに Linux 機へ配置・ビルド・設定し、`koe "テスト"` が
-   本体スピーカーから聞こえる。
-2. `koe devices` に本体スピーカーが出て、`device=` に指定すると
-   既定デバイスが別でもそこから鳴る。
-3. `echo テスト | koe` でも同じ結果になる。
+   本体スピーカーから聞こえる。（確認済み）
+2. `koe devices` に本体スピーカーが出て、`device=` に指定するとそこから鳴る。
+   存在しない ID は終了コード 1 で拒む。（確認済み。既定と別デバイスからの再生は
+   HDMI 側にスピーカーがなく未確認）
+3. `echo テスト | koe` でも同じ結果になる。（確認済み）
 4. Windows 機でのビルドと再生は README に「未検証」と明記し、確認できた時点で更新する。
 
 ## 9. この案を卒業する条件

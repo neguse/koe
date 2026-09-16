@@ -1,5 +1,8 @@
 /* koe: 日本語テキストを VOICEVOX CORE で合成し、miniaudio でその場で鳴らす。 */
 
+#ifndef _WIN32
+#define _DEFAULT_SOURCE /* setenv */
+#endif
 #define VOICEVOX_LOAD_ONNXRUNTIME
 #include "voicevox_core.h"
 
@@ -39,7 +42,7 @@ enum { EXIT_FAIL = 1, EXIT_USAGE = 2 };
 /* ---- 実行時に解決する VOICEVOX CORE の関数 ---- */
 
 #define VV_FUNCS(X)                                             \
-    X(voicevox_get_onnxruntime_lib_recommended_versioned_filename) \
+    X(voicevox_get_onnxruntime_lib_recommended_unversioned_filename) \
     X(voicevox_make_default_load_onnxruntime_options)           \
     X(voicevox_onnxruntime_load_once)                           \
     X(voicevox_open_jtalk_rc_new)                               \
@@ -62,6 +65,13 @@ enum { EXIT_FAIL = 1, EXIT_USAGE = 2 };
 VV_FUNCS(VV_DECL)
 
 static int load_core(const char *core) {
+    /* core は tracing の EnvFilter を RUST_LOG で読む。未設定なら INFO が
+       標準エラーに出るので、利用者が指定していない限り error に絞る。 */
+#ifdef _WIN32
+    if (!getenv("RUST_LOG")) _putenv_s("RUST_LOG", "error");
+#else
+    setenv("RUST_LOG", "error", 0);
+#endif
     char path[KOE_PATH_MAX];
     snprintf(path, sizeof path, "%s" PATH_SEP "c_api" PATH_SEP "lib" PATH_SEP LIB_NAME, core);
 #ifdef _WIN32
@@ -111,10 +121,25 @@ static int for_each_entry(const char *dir, entry_fn fn, void *ud) {
 #endif
 }
 
-static int pick_dict(const char *dir, const char *name, void *ud) {
-    if (strncmp(name, "open_jtalk_dic", 14) != 0) return 0;
-    snprintf((char *)ud, KOE_PATH_MAX, "%s" PATH_SEP "%s", dir, name);
+/* 名前が prefix で始まる最初のエントリのパスを out に入れる。 */
+typedef struct { const char *prefix; char out[KOE_PATH_MAX]; } prefix_pick;
+
+static int pick_prefix(const char *dir, const char *name, void *ud) {
+    prefix_pick *p = ud;
+    if (strncmp(name, p->prefix, strlen(p->prefix)) != 0) return 0;
+    snprintf(p->out, sizeof p->out, "%s" PATH_SEP "%s", dir, name);
     return 1;
+}
+
+static int find_with_prefix(const char *dir, const char *prefix, char *out, size_t cap) {
+    prefix_pick p = { prefix, "" };
+    for_each_entry(dir, pick_prefix, &p);
+    if (p.out[0] == '\0') {
+        fprintf(stderr, "koe: no %s* under %s\n", prefix, dir);
+        return -1;
+    }
+    snprintf(out, cap, "%s", p.out);
+    return 0;
 }
 
 static int vv_fail(VoicevoxResultCode rc) {
@@ -141,25 +166,31 @@ static int load_vvm(const char *dir, const char *name, void *ud) {
 static struct VoicevoxSynthesizer *init_synthesizer(const char *core) {
     if (load_core(core) != 0) return NULL;
 
-    char path[KOE_PATH_MAX];
+    /* Downloader が置く ONNX Runtime の版は core の「推奨」と一致しないことがあるので、
+       版なしの名前を接頭辞にして実際にあるファイルを使う。 */
+    char dir[KOE_PATH_MAX], path[KOE_PATH_MAX];
     struct VoicevoxLoadOnnxruntimeOptions ort = p_voicevox_make_default_load_onnxruntime_options();
-    snprintf(path, sizeof path, "%s" PATH_SEP "onnxruntime" PATH_SEP "lib" PATH_SEP "%s", core,
-             p_voicevox_get_onnxruntime_lib_recommended_versioned_filename());
+    snprintf(dir, sizeof dir, "%s" PATH_SEP "onnxruntime" PATH_SEP "lib", core);
+    if (find_with_prefix(dir, p_voicevox_get_onnxruntime_lib_recommended_unversioned_filename(), path, sizeof path) != 0) return NULL;
     ort.filename = path;
     const struct VoicevoxOnnxruntime *onnxruntime;
     VoicevoxResultCode rc = p_voicevox_onnxruntime_load_once(ort, &onnxruntime);
     if (rc != VOICEVOX_RESULT_OK) { vv_fail(rc); return NULL; }
 
-    char dict_dir[KOE_PATH_MAX], dict[KOE_PATH_MAX] = "";
-    snprintf(dict_dir, sizeof dict_dir, "%s" PATH_SEP "dict", core);
-    for_each_entry(dict_dir, pick_dict, dict);
-    if (dict[0] == '\0') { fprintf(stderr, "koe: no open_jtalk_dic* under %s\n", dict_dir); return NULL; }
+    char dict[KOE_PATH_MAX];
+    snprintf(dir, sizeof dir, "%s" PATH_SEP "dict", core);
+    if (find_with_prefix(dir, "open_jtalk_dic", dict, sizeof dict) != 0) return NULL;
     struct OpenJtalkRc *open_jtalk;
     rc = p_voicevox_open_jtalk_rc_new(dict, &open_jtalk);
     if (rc != VOICEVOX_RESULT_OK) { vv_fail(rc); return NULL; }
 
+    /* 0(自動)だと ONNX Runtime が CPU affinity を設定しようとして、cgroup 等で
+       CPU が絞られた環境では失敗してログを吐き、遅くなる。明示すれば設定しない。
+       合成時間は 2〜4 スレッドで頭打ちだった。 */
+    struct VoicevoxInitializeOptions init = p_voicevox_make_default_initialize_options();
+    init.cpu_num_threads = 4;
     struct VoicevoxSynthesizer *synth;
-    rc = p_voicevox_synthesizer_new(onnxruntime, open_jtalk, p_voicevox_make_default_initialize_options(), &synth);
+    rc = p_voicevox_synthesizer_new(onnxruntime, open_jtalk, init, &synth);
     p_voicevox_open_jtalk_rc_delete(open_jtalk);
     if (rc != VOICEVOX_RESULT_OK) { vv_fail(rc); return NULL; }
 
