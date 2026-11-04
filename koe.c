@@ -57,6 +57,9 @@ enum { EXIT_FAIL = 1, EXIT_USAGE = 2 };
     X(voicevox_synthesizer_load_voice_model)                    \
     X(voicevox_make_default_tts_options)                        \
     X(voicevox_synthesizer_tts)                                 \
+    X(voicevox_synthesizer_create_audio_query)                  \
+    X(voicevox_make_default_synthesis_options)                  \
+    X(voicevox_synthesizer_synthesis)                           \
     X(voicevox_synthesizer_create_metas_json)                   \
     X(voicevox_json_free)                                       \
     X(voicevox_wav_free)                                        \
@@ -381,9 +384,55 @@ static int load_config(koe_config *cfg) {
     return rc;
 }
 
+/* AudioQuery の JSON の話速 (speedScale) を speed にした文字列を作る (malloc)。キーが無ければ NULL。 */
+static char *with_speed(const char *json, double speed) {
+    static const char *keys[] = {"\"speedScale\":", "\"speed_scale\":"};
+    for (size_t k = 0; k < sizeof keys / sizeof keys[0]; k++) {
+        const char *p = strstr(json, keys[k]);
+        if (!p) continue;
+        const char *v = p + strlen(keys[k]);
+        while (*v == ' ') v++;
+        const char *end = v;
+        while (*end && strchr("+-.0123456789eE", *end)) end++;
+        char *out = malloc(strlen(json) + 64);
+        if (!out) return NULL;
+        sprintf(out, "%.*s%g%s", (int)(v - json), json, speed, end);
+        return out;
+    }
+    return NULL;
+}
+
+/* text を合成する。speed が 1 でなければ AudioQuery の話速を変えてから合成する。 */
+static VoicevoxResultCode synthesize(struct VoicevoxSynthesizer *synth, const char *text, unsigned style,
+                                     double speed, uintptr_t *wav_len, uint8_t **wav) {
+    if (speed == 1.0)
+        return p_voicevox_synthesizer_tts(synth, text, style, p_voicevox_make_default_tts_options(), wav_len, wav);
+    char *query = NULL;
+    VoicevoxResultCode vrc = p_voicevox_synthesizer_create_audio_query(synth, text, style, &query);
+    if (vrc != VOICEVOX_RESULT_OK) return vrc;
+    char *fast = with_speed(query, speed);
+    p_voicevox_json_free(query);
+    if (!fast) { fputs("koe: no speedScale in the audio query\n", stderr); return VOICEVOX_RESULT_INVALID_AUDIO_QUERY_ERROR; }
+    vrc = p_voicevox_synthesizer_synthesis(synth, fast, style, p_voicevox_make_default_synthesis_options(), wav_len, wav);
+    free(fast);
+    return vrc;
+}
+
+/* 合成した WAV をそのままファイルに書く。 */
+static int write_wav(const char *path, const uint8_t *wav, uintptr_t len) {
+    FILE *fp = fopen(path, "wb");
+    if (!fp) { fprintf(stderr, "koe: cannot open %s\n", path); return -1; }
+    int ok = fwrite(wav, 1, len, fp) == len;
+    if (fclose(fp) != 0) ok = 0;
+    if (!ok) fprintf(stderr, "koe: cannot write %s\n", path);
+    return ok ? 0 : -1;
+}
+
 static int usage(void) {
     fputs("usage: koe TEXT...\n"
           "       echo TEXT | koe\n"
+          "       koe -o FILE TEXT...   write the WAV to FILE instead of playing\n"
+          "       koe -s SPEED TEXT...  speak at SPEED (VOICEVOX speedScale, 1 = normal)\n"
           "       koe devices    list output devices (ID<TAB>name, * = default)\n"
           "       koe styles     print speaker/style metadata as JSON\n", stderr);
     return EXIT_USAGE;
@@ -391,6 +440,19 @@ static int usage(void) {
 
 static int run(int argc, char **argv) {
     if (argc == 2 && strcmp(argv[1], "devices") == 0) return list_devices();
+    const char *out = NULL;
+    double speed = 1.0;
+    while (argc >= 3 && (strcmp(argv[1], "-o") == 0 || strcmp(argv[1], "-s") == 0)) {
+        if (argv[1][1] == 'o') {
+            out = argv[2];
+        } else {
+            char *end;
+            speed = strtod(argv[2], &end);
+            if (*end || !(speed > 0)) return usage();
+        }
+        argv += 2;
+        argc -= 2;
+    }
     if (argc >= 2 && argv[1][0] == '-') return usage();
 
     koe_config cfg;
@@ -415,13 +477,11 @@ static int run(int argc, char **argv) {
     if (synth) {
         uintptr_t wav_len = 0;
         uint8_t *wav = NULL;
-        VoicevoxResultCode vrc = p_voicevox_synthesizer_tts(synth, text, cfg.style,
-                                                            p_voicevox_make_default_tts_options(),
-                                                            &wav_len, &wav);
+        VoicevoxResultCode vrc = synthesize(synth, text, cfg.style, speed, &wav_len, &wav);
         if (vrc != VOICEVOX_RESULT_OK) {
             vv_fail(vrc);
         } else {
-            if (play_wav(wav, wav_len, &cfg) == 0) rc = 0;
+            if ((out ? write_wav(out, wav, wav_len) : play_wav(wav, wav_len, &cfg)) == 0) rc = 0;
             p_voicevox_wav_free(wav);
         }
         p_voicevox_synthesizer_delete(synth);
