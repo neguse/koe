@@ -57,7 +57,7 @@ Go で書く案は `go build` 一つで済む利点があったが、purego で 
 - CPU 版のみ。GPU（CUDA / DirectML）は扱わない。
 - 設定は `key=value` 行の自前パースで、TOML ライブラリは足さない。
 - 常駐しない。毎回ライブラリと辞書とモデルを読み込む。起動 1 秒弱は許容する。
-- 音声のファイル出力、話速・音高の調整、複数話者の切り替えは MVP ではやらない。
+- 音高の調整、複数話者の切り替えは MVP ではやらない。
 
 ## 3. 構成
 
@@ -88,6 +88,8 @@ flowchart LR
 ## 4. 処理の流れ
 
 1. 引数を解釈する。サブコマンド `devices` / `styles` はそれぞれ一覧を出して終わる。
+   先頭の `-o FILE` は、再生の代わりに WAV を FILE に書く指定。
+   `-s SPEED` は話速 (VOICEVOX の `speedScale`、1 が標準)。
    引数がなければ標準入力を末尾まで読む。空なら終了コード 2。
 2. 設定ファイルを読む。無ければ既定値。`core` の既定は
    `~/.local/share/koe/voicevox_core`（Windows は `%LOCALAPPDATA%\koe\voicevox_core`）。
@@ -104,7 +106,10 @@ flowchart LR
    - `{core}/models/vvms/*.vvm` を `voicevox_voice_model_file_open` して
      `voicevox_synthesizer_load_voice_model`
 5. `voicevox_synthesizer_tts(text, style)` で WAV を得る。
-6. miniaudio で WAV をデコードし、`ma_device_id` が設定の `device` と完全一致する
+   話速を変えるときは `voicevox_synthesizer_create_audio_query` の JSON の `speedScale` を
+   書き換えて `voicevox_synthesizer_synthesis` に渡す。
+6. `-o FILE` なら WAV をそのまま FILE に書いて終了コード 0 (再生しない)。
+   そうでなければ miniaudio で WAV をデコードし、`ma_device_id` が設定の `device` と完全一致する
    出力デバイスで再生する。空なら OS 既定。
    再生完了まで待ち、`voicevox_wav_free` して終了コード 0。
 7. どこかで失敗したら `voicevox_error_result_to_message` か miniaudio の

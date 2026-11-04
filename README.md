@@ -76,6 +76,8 @@ $ koe "文"                 # 引数の文を喋る
 $ echo "文" | koe          # 標準入力からも受ける
 $ koe devices              # 出力デバイスの一覧（ID<TAB>名前、既定に * ）
 $ koe styles               # 配置済みモデルの話者とスタイル ID（JSON）
+$ koe -o out.wav "文"      # 鳴らさずに WAV をファイルに書く
+$ koe -s 1.15 "文"         # 話速を変える（VOICEVOX の speedScale、1 が標準）
 ```
 
 終了コードは、喋り終えたら 0、合成や再生に失敗したら 1、使い方の誤りは 2。
